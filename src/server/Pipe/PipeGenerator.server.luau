@@ -1,3 +1,6 @@
+local ServerScriptService = game:GetService("ServerScriptService")
+local PipeDebugState = require(ServerScriptService.Server.Pipe.PipeDebugState)
+
 local CollectionService = game:GetService("CollectionService")
 local Workspace = game:GetService("Workspace")
 
@@ -7,20 +10,41 @@ local CHECK_SIZE = Vector3.new(0.8, 0.8, 0.8)
 local STEP = 1
 
 local MAX_SEGMENTS_PER_PIPE = 150
-local GROWTH_DELAY = 0.12
 
 local PIPE_MATERIAL = Enum.Material.SmoothPlastic
 
-local START_HUE = 0
-local HUE_STEP = 0.01
+local MIN_BRIGHTNESS = 0.55
+local MAX_BRIGHTNESS = 1
+local BRIGHTNESS_STEP = 0.015
 
 local PIPE_ARCHETYPES = {
-	{ name = "LongRunner", forward = 5, side = 1, wall = 4, crowdPenalty = 3 },
-	{ name = "WallHugger", forward = 3, side = 1, wall = 7, crowdPenalty = 2 },
-	{ name = "Squirmy", forward = 2, side = 2, wall = 6, crowdPenalty = 1 },
+	{
+		name = "LongRunner",
+		forward = 5,
+		side = 1,
+		wall = 4,
+		crowdPenalty = 3,
+		baseColor = Color3.fromRGB(255, 80, 80),
+	},
+	{
+		name = "WallHugger",
+		forward = 3,
+		side = 1,
+		wall = 7,
+		crowdPenalty = 2,
+		baseColor = Color3.fromRGB(80, 255, 120),
+	},
+	{
+		name = "Squirmy",
+		forward = 2,
+		side = 2,
+		wall = 6,
+		crowdPenalty = 1,
+		baseColor = Color3.fromRGB(90, 140, 255),
+	},
 }
 
-local PIPE_ATTRACTION_BOX_SIZE = Vector3.new(3, 1, 3)
+local PIPE_ATTRACTION_BOX_SIZE = Vector3.new(5, 1, 5)
 
 -- How far the pipe "sniffs" for nearby walls
 local ATTRACTION_BOX_SIZE = Vector3.new(3, 1, 3)
@@ -43,6 +67,13 @@ end
 local function getFirstTaggedContainer(tagName)
 	local containers = getTaggedContainers(tagName)
 	return containers[1]
+end
+
+local function applyBrightness(color, brightness)
+	local r = math.clamp(color.R * brightness, 0, 1)
+	local g = math.clamp(color.G * brightness, 0, 1)
+	local b = math.clamp(color.B * brightness, 0, 1)
+	return Color3.new(r, g, b)
 end
 
 local function makeIncludeParams(tagName)
@@ -80,6 +111,20 @@ local function isBlocked(position, overlapParams, ignorePart)
 	end
 
 	return false, nil
+end
+
+local function waitForPermissionToGrow()
+	while true do
+		if not PipeDebugState.IsPaused then
+			return
+		end
+
+		if PipeDebugState:ConsumeStep() then
+			return
+		end
+
+		task.wait(0.05)
+	end
 end
 
 local function countNearbyPipes(position, pipeParams, ignorePart)
@@ -208,12 +253,33 @@ local function chooseBestMove(
 end
 
 local function chooseArchetype()
-	return PIPE_ARCHETYPES[math.random(1, #PIPE_ARCHETYPES)]
+	local totalWeight = 0
+
+	for _, archetype in ipairs(PIPE_ARCHETYPES) do
+		totalWeight += PipeDebugState:GetArchetypeWeight(archetype.name)
+	end
+
+	if totalWeight <= 0 then
+		return PIPE_ARCHETYPES[1]
+	end
+
+	local roll = math.random() * totalWeight
+	local running = 0
+
+	for _, archetype in ipairs(PIPE_ARCHETYPES) do
+		running += PipeDebugState:GetArchetypeWeight(archetype.name)
+
+		if roll <= running then
+			return archetype
+		end
+	end
+
+	return PIPE_ARCHETYPES[#PIPE_ARCHETYPES]
 end
 
 --// PIPE GROWTH
 
-local function growFromSeed(seedPart, pipeFolder, blockParams, noPipeParams, pipeParams, hueOffset)
+local function growFromSeed(seedPart, pipeFolder, blockParams, noPipeParams, pipeParams)
 	local archetype = chooseArchetype()
 	print(seedPart.Name, "picked archetype:", archetype.name)
 
@@ -226,20 +292,31 @@ local function growFromSeed(seedPart, pipeFolder, blockParams, noPipeParams, pip
 		currentDirection = Vector3.new(1, 0, 0)
 	end
 
-	local currentHue = hueOffset
+	local currentBrightness = MIN_BRIGHTNESS
+	local brightnessDirection = 1
 
-	seedPart.Color = Color3.fromHSV(currentHue, 0.5, 0.95)
+	seedPart.Color = applyBrightness(archetype.baseColor, currentBrightness)
 	seedPart.Material = PIPE_MATERIAL
 
 	local function getDebugColor()
-		local color = Color3.fromHSV(currentHue, 0.5, 0.95)
-		currentHue = (currentHue + HUE_STEP) % 1
+		local color = applyBrightness(archetype.baseColor, currentBrightness)
+
+		currentBrightness += BRIGHTNESS_STEP * brightnessDirection
+
+		if currentBrightness >= MAX_BRIGHTNESS then
+			currentBrightness = MAX_BRIGHTNESS
+			brightnessDirection = -1
+		elseif currentBrightness <= MIN_BRIGHTNESS then
+			currentBrightness = MIN_BRIGHTNESS
+			brightnessDirection = 1
+		end
+
 		return color
 	end
 
-	getDebugColor()
-
 	for i = 1, MAX_SEGMENTS_PER_PIPE do
+		waitForPermissionToGrow()
+
 		local bestMove = chooseBestMove(
 			currentPosition,
 			currentDirection,
@@ -259,7 +336,9 @@ local function growFromSeed(seedPart, pipeFolder, blockParams, noPipeParams, pip
 		currentPosition = bestMove.position
 		currentDirection = bestMove.dir
 
-		task.wait(GROWTH_DELAY)
+		if not PipeDebugState.IsPaused then
+			task.wait(PipeDebugState.GrowthDelay)
+		end
 	end
 end
 
@@ -279,10 +358,8 @@ local blockParams = makeCombinedBlockParams()
 local noPipeParams = makeIncludeParams("NoPipe")
 local pipeParams = makeIncludeParams("Pipe")
 
-for index, seedPart in ipairs(seedParts) do
-	local hueOffset = (START_HUE + ((index - 1) * 0.15)) % 1
-
+for _, seedPart in ipairs(seedParts) do
 	task.spawn(function()
-		growFromSeed(seedPart, pipeFolder, blockParams, noPipeParams, pipeParams, hueOffset)
+		growFromSeed(seedPart, pipeFolder, blockParams, noPipeParams, pipeParams)
 	end)
 end
