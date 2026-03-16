@@ -213,7 +213,7 @@ end
 
 --// PIPE GROWTH
 
-local function growFromSeed(seedPart, pipeFolder, blockParams, noPipeParams, hueOffset)
+local function growFromSeed(seedPart, pipeFolder, blockParams, noPipeParams, pipeParams, hueOffset)
 	local archetype = chooseArchetype()
 	print(seedPart.Name, "picked archetype:", archetype.name)
 
@@ -240,8 +240,15 @@ local function growFromSeed(seedPart, pipeFolder, blockParams, noPipeParams, hue
 	getDebugColor()
 
 	for i = 1, MAX_SEGMENTS_PER_PIPE do
-		local bestMove =
-			chooseBestMove(currentPosition, currentDirection, blockParams, noPipeParams, seedPart, archetype)
+		local bestMove = chooseBestMove(
+			currentPosition,
+			currentDirection,
+			blockParams,
+			noPipeParams,
+			pipeParams,
+			seedPart,
+			archetype
+		)
 
 		if not bestMove then
 			warn(("Pipe seed '%s' stopped at segment %d: no valid moves left."):format(seedPart.Name, i))
@@ -270,12 +277,12 @@ end
 
 local blockParams = makeCombinedBlockParams()
 local noPipeParams = makeIncludeParams("NoPipe")
-
+local pipeParams = makeIncludeParams("Pipe")
 
 for index, seedPart in ipairs(seedParts) do
 	local hueOffset = (START_HUE + ((index - 1) * 0.15)) % 1
 
 	task.spawn(function()
-		growFromSeed(seedPart, pipeFolder, blockParams, noPipeParams, hueOffset)
+		growFromSeed(seedPart, pipeFolder, blockParams, noPipeParams, pipeParams, hueOffset)
 	end)
 end
